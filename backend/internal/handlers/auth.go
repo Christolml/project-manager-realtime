@@ -3,11 +3,13 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/anomalyco/project-manager/internal/auth"
 	"github.com/anomalyco/project-manager/internal/database"
 	"github.com/anomalyco/project-manager/internal/models"
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -36,7 +38,7 @@ type LoginInput struct {
 
 func RegisterAuthRoutes(api huma.API, db *database.DB, jwtSecret string) {
 	huma.Register(api, huma.Operation{
-				OperationID: "register",
+		OperationID: "register",
 		Method:      http.MethodPost,
 		Path:        "/api/auth/register",
 		Summary:     "Register a new user",
@@ -96,4 +98,27 @@ func RegisterAuthRoutes(api huma.API, db *database.DB, jwtSecret string) {
 		resp.Body.Username = user.Username
 		return resp, nil
 	})
+}
+
+func resolveAuth(authHeader string, jwtSecret string) (*auth.Claims, error) {
+	if authHeader == "" {
+		return nil, huma.Error401Unauthorized("missing authorization header")
+	}
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return nil, huma.Error401Unauthorized("invalid authorization format")
+	}
+	claims, err := auth.ValidateToken(parts[1], jwtSecret)
+	if err != nil {
+		return nil, huma.Error401Unauthorized("invalid or expired token")
+	}
+	return claims, nil
+}
+
+func mustParseUUID(s string) (uuid.UUID, error) {
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return uuid.Nil, huma.Error400BadRequest("invalid id: " + s)
+	}
+	return id, nil
 }

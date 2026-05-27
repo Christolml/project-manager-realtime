@@ -60,22 +60,16 @@ func WebSocketHandler(hub *websocket.Hub, jwtSecret string) http.HandlerFunc {
 				continue
 			}
 
-			switch msg.Type {
-			case "subscribe":
-				if pid, ok := msg.Data.(string); ok {
-					projectID, err := uuid.Parse(pid)
-					if err == nil {
-						hub.Subscribe(client, projectID)
-					}
-				}
-			case "unsubscribe":
-				if pid, ok := msg.Data.(string); ok {
-					projectID, err := uuid.Parse(pid)
-					if err == nil {
-						hub.Unsubscribe(client, projectID)
-					}
-				}
+		switch msg.Type {
+		case "subscribe":
+			if msg.ProjectID != uuid.Nil {
+				hub.Subscribe(client, msg.ProjectID)
 			}
+		case "unsubscribe":
+			if msg.ProjectID != uuid.Nil {
+				hub.Unsubscribe(client, msg.ProjectID)
+			}
+		}
 		}
 	}
 }

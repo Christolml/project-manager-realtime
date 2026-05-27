@@ -85,6 +85,16 @@ func (h *Hub) Broadcast(projectID uuid.UUID, msg *Message) {
 	}
 }
 
+func (h *Hub) SendToUser(userID uuid.UUID, msg *Message) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for client := range h.clients {
+		if client.UserID == userID {
+			_ = client.SendJSON(msg)
+		}
+	}
+}
+
 func ParseMessage(data []byte) (*Message, error) {
 	var msg Message
 	if err := json.Unmarshal(data, &msg); err != nil {

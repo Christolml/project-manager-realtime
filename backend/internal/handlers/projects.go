@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	"github.com/anomalyco/project-manager/internal/database"
-	"github.com/anomalyco/project-manager/internal/middleware"
 	"github.com/anomalyco/project-manager/internal/models"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
@@ -68,7 +67,16 @@ type DeleteProjectInput struct {
 	ID            string `path:"id"`
 }
 
-func RegisterProjectRoutes(api huma.API, db *database.DB) {
+type listProjectsInput struct {
+	Authorization string `header:"Authorization"`
+}
+
+type getProjectInput struct {
+	Authorization string `header:"Authorization"`
+	ID            string `path:"id"`
+}
+
+func RegisterProjectRoutes(api huma.API, db *database.DB, jwtSecret string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "createProject",
 		Method:      http.MethodPost,
@@ -77,9 +85,9 @@ func RegisterProjectRoutes(api huma.API, db *database.DB) {
 		Security:    []map[string][]string{{"bearerAuth": {}}},
 		Tags:        []string{"Projects"},
 	}, func(ctx context.Context, input *CreateProjectInput) (*ProjectOutput, error) {
-		claims := middleware.GetClaims(ctx)
-		if claims == nil {
-			return nil, huma.Error401Unauthorized("unauthorized")
+		claims, err := resolveAuth(input.Authorization, jwtSecret)
+		if err != nil {
+			return nil, err
 		}
 
 		project := &models.Project{
@@ -92,19 +100,15 @@ func RegisterProjectRoutes(api huma.API, db *database.DB) {
 			return nil, huma.Error500InternalServerError("failed to create project")
 		}
 
-		member := &models.ProjectMember{
-			ProjectID: project.ID,
-			UserID:    claims.UserID,
-			Role:      "admin",
-		}
-		db.Gorm.Create(member)
+		db.Gorm.Create(&models.ProjectMember{
+			ProjectID: project.ID, UserID: claims.UserID, Role: "admin",
+		})
 
-		defaultStatuses := []models.TaskStatus{
+		for _, s := range []models.TaskStatus{
 			{ProjectID: project.ID, Name: "To Do", Color: "#6B7280", Order: 0},
 			{ProjectID: project.ID, Name: "In Progress", Color: "#3B82F6", Order: 1},
 			{ProjectID: project.ID, Name: "Done", Color: "#10B981", Order: 2},
-		}
-		for _, s := range defaultStatuses {
+		} {
 			db.Gorm.Create(&s)
 		}
 
@@ -124,12 +128,10 @@ func RegisterProjectRoutes(api huma.API, db *database.DB) {
 		Summary:     "List user projects",
 		Security:    []map[string][]string{{"bearerAuth": {}}},
 		Tags:        []string{"Projects"},
-	}, func(ctx context.Context, input *struct {
-		Authorization string `header:"Authorization"`
-	}) (*ProjectListOutput, error) {
-		claims := middleware.GetClaims(ctx)
-		if claims == nil {
-			return nil, huma.Error401Unauthorized("unauthorized")
+	}, func(ctx context.Context, input *listProjectsInput) (*ProjectListOutput, error) {
+		claims, err := resolveAuth(input.Authorization, jwtSecret)
+		if err != nil {
+			return nil, err
 		}
 
 		var projects []models.Project
@@ -166,25 +168,35 @@ func RegisterProjectRoutes(api huma.API, db *database.DB) {
 		Summary:     "Get project details",
 		Security:    []map[string][]string{{"bearerAuth": {}}},
 		Tags:        []string{"Projects"},
-	}, func(ctx context.Context, input *struct {
-		Authorization string `header:"Authorization"`
-		ID            string `path:"id"`
-	}) (*ProjectDetailOutput, error) {
-		claims := middleware.GetClaims(ctx)
-		if claims == nil {
-			return nil, huma.Error401Unauthorized("unauthorized")
+	}, func(ctx context.Context, input *getProjectInput) (*ProjectDetailOutput, error) {
+		claims, err := resolveAuth(input.Authorization, jwtSecret)
+		if err != nil {
+			return nil, err
 		}
 
-		projectID, err := uuid.Parse(input.ID)
+		projectID, err := mustParseUUID(input.ID)
 		if err != nil {
-			return nil, huma.Error400BadRequest("invalid project id")
+			return nil, err
 		}
 
 		var project models.Project
-		if result := db.Gorm.Preload("Statuses", func(db *gorm.DB) *gorm.DB {
-			return db.Order("order ASC")
-		}).Preload("Members.User").First(&project, "id = ?", projectID); result.Error != nil {
+		result := db.Gorm.
+			Preload("Statuses", func(d *gorm.DB) *gorm.DB { return d.Order("status_order ASC") }).
+			Preload("Members.User").
+			First(&project, "id = ?", projectID)
+
+		if result.Error != nil {
 			return nil, huma.Error404NotFound("project not found")
+		}
+
+		if project.OwnerID != claims.UserID {
+			var memberCount int64
+			db.Gorm.Model(&models.ProjectMember{}).
+				Where("project_id = ? AND user_id = ?", projectID, claims.UserID).
+				Count(&memberCount)
+			if memberCount == 0 {
+				return nil, huma.Error404NotFound("project not found")
+			}
 		}
 
 		resp := &ProjectDetailOutput{}
@@ -207,14 +219,14 @@ func RegisterProjectRoutes(api huma.API, db *database.DB) {
 		Security:    []map[string][]string{{"bearerAuth": {}}},
 		Tags:        []string{"Projects"},
 	}, func(ctx context.Context, input *UpdateProjectInput) (*ProjectOutput, error) {
-		claims := middleware.GetClaims(ctx)
-		if claims == nil {
-			return nil, huma.Error401Unauthorized("unauthorized")
+		claims, err := resolveAuth(input.Authorization, jwtSecret)
+		if err != nil {
+			return nil, err
 		}
 
-		projectID, err := uuid.Parse(input.ID)
+		projectID, err := mustParseUUID(input.ID)
 		if err != nil {
-			return nil, huma.Error400BadRequest("invalid project id")
+			return nil, err
 		}
 
 		var project models.Project
@@ -226,7 +238,6 @@ func RegisterProjectRoutes(api huma.API, db *database.DB) {
 			project.Name = input.Body.Name
 		}
 		project.Description = input.Body.Description
-
 		db.Gorm.Save(&project)
 
 		resp := &ProjectOutput{}
@@ -246,21 +257,24 @@ func RegisterProjectRoutes(api huma.API, db *database.DB) {
 		Security:    []map[string][]string{{"bearerAuth": {}}},
 		Tags:        []string{"Projects"},
 	}, func(ctx context.Context, input *DeleteProjectInput) (*struct{}, error) {
-		claims := middleware.GetClaims(ctx)
-		if claims == nil {
-			return nil, huma.Error401Unauthorized("unauthorized")
+		claims, err := resolveAuth(input.Authorization, jwtSecret)
+		if err != nil {
+			return nil, err
 		}
 
-		projectID, err := uuid.Parse(input.ID)
+		projectID, err := mustParseUUID(input.ID)
 		if err != nil {
-			return nil, huma.Error400BadRequest("invalid project id")
+			return nil, err
 		}
+
+		db.Gorm.Where("project_id = ?", projectID).Delete(&models.Task{})
+		db.Gorm.Where("project_id = ?", projectID).Delete(&models.TaskStatus{})
+		db.Gorm.Where("project_id = ?", projectID).Delete(&models.ProjectMember{})
 
 		result := db.Gorm.Where("id = ? AND owner_id = ?", projectID, claims.UserID).Delete(&models.Project{})
 		if result.RowsAffected == 0 {
 			return nil, huma.Error404NotFound("project not found")
 		}
-
 		return nil, nil
 	})
 }

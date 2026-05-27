@@ -6,22 +6,32 @@ import (
 	"time"
 
 	"github.com/anomalyco/project-manager/internal/database"
-	"github.com/anomalyco/project-manager/internal/middleware"
 	"github.com/anomalyco/project-manager/internal/models"
 	ws "github.com/anomalyco/project-manager/internal/websocket"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 )
 
+func parseDate(s *string) *models.DateOnly {
+	if s == nil || *s == "" {
+		return nil
+	}
+	t, err := time.Parse("2006-01-02", *s)
+	if err != nil {
+		return nil
+	}
+	return &models.DateOnly{Time: t}
+}
+
 type CreateTaskInput struct {
 	Authorization string `header:"Authorization"`
 	ProjectID     string `path:"projectId"`
 	Body struct {
-		Title       string     `json:"title" minLength:"1" maxLength:"200"`
-		Description string     `json:"description,omitempty" maxLength:"2000"`
-		StatusID    string     `json:"statusId"`
-		AssignedTo  *string    `json:"assignedTo,omitempty"`
-		DueDate     *time.Time `json:"dueDate,omitempty"`
+		Title       string  `json:"title" minLength:"1" maxLength:"200"`
+		Description string  `json:"description,omitempty" maxLength:"2000"`
+		StatusID    string  `json:"statusId"`
+		AssignedTo  *string `json:"assignedTo,omitempty"`
+		DueDate     *string `json:"dueDate,omitempty"`
 	}
 }
 
@@ -30,11 +40,11 @@ type UpdateTaskInput struct {
 	ProjectID     string `path:"projectId"`
 	TaskID        string `path:"taskId"`
 	Body struct {
-		Title       string     `json:"title,omitempty" maxLength:"200"`
-		Description string     `json:"description,omitempty" maxLength:"2000"`
-		StatusID    string     `json:"statusId,omitempty"`
-		AssignedTo  *string    `json:"assignedTo,omitempty"`
-		DueDate     *time.Time `json:"dueDate,omitempty"`
+		Title       string  `json:"title,omitempty" maxLength:"200"`
+		Description string  `json:"description,omitempty" maxLength:"2000"`
+		StatusID    string  `json:"statusId,omitempty"`
+		AssignedTo  *string `json:"assignedTo,omitempty"`
+		DueDate     *string `json:"dueDate,omitempty"`
 	}
 }
 
@@ -55,16 +65,17 @@ type DeleteTaskInput struct {
 
 type TaskOutput struct {
 	Body struct {
-		ID          uuid.UUID  `json:"id"`
-		ProjectID   uuid.UUID  `json:"projectId"`
-		Title       string     `json:"title"`
-		Description string     `json:"description"`
-		StatusID    uuid.UUID  `json:"statusId"`
-		AssignedTo  *uuid.UUID `json:"assignedTo"`
-		DueDate     *time.Time `json:"dueDate"`
-		CreatedBy   uuid.UUID  `json:"createdBy"`
-		CreatedAt   string     `json:"createdAt"`
-		UpdatedAt   string     `json:"updatedAt"`
+		ID          uuid.UUID         `json:"id"`
+		ProjectID   uuid.UUID         `json:"projectId"`
+		Title       string            `json:"title"`
+		Description string            `json:"description"`
+		StatusID    uuid.UUID         `json:"statusId"`
+		AssignedTo  *uuid.UUID        `json:"assignedTo"`
+		DueDate     *models.DateOnly  `json:"dueDate"`
+		CreatedBy   uuid.UUID         `json:"createdBy"`
+		UpdatedBy   *uuid.UUID        `json:"updatedBy"`
+		CreatedAt   string            `json:"createdAt"`
+		UpdatedAt   string            `json:"updatedAt"`
 	}
 }
 
@@ -77,7 +88,7 @@ type ListTasksOutput struct {
 	Body []models.Task
 }
 
-func RegisterTaskRoutes(api huma.API, db *database.DB, hub *ws.Hub) {
+func RegisterTaskRoutes(api huma.API, db *database.DB, hub *ws.Hub, jwtSecret string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "listTasks",
 		Method:      http.MethodGet,
@@ -86,23 +97,22 @@ func RegisterTaskRoutes(api huma.API, db *database.DB, hub *ws.Hub) {
 		Security:    []map[string][]string{{"bearerAuth": {}}},
 		Tags:        []string{"Tasks"},
 	}, func(ctx context.Context, input *ListTasksInput) (*ListTasksOutput, error) {
-		claims := middleware.GetClaims(ctx)
-		if claims == nil {
-			return nil, huma.Error401Unauthorized("unauthorized")
+		_, err := resolveAuth(input.Authorization, jwtSecret)
+		if err != nil {
+			return nil, err
 		}
 
 		projectID, _ := uuid.Parse(input.ProjectID)
-
 		var tasks []models.Task
 		db.Gorm.Where("project_id = ?", projectID).
 			Preload("Status").
 			Preload("Assignee").
 			Preload("Creator").
+			Preload("Updater").
 			Order("created_at DESC").
 			Find(&tasks)
 
-		resp := &ListTasksOutput{Body: tasks}
-		return resp, nil
+		return &ListTasksOutput{Body: tasks}, nil
 	})
 
 	huma.Register(api, huma.Operation{
@@ -113,19 +123,18 @@ func RegisterTaskRoutes(api huma.API, db *database.DB, hub *ws.Hub) {
 		Security:    []map[string][]string{{"bearerAuth": {}}},
 		Tags:        []string{"Tasks"},
 	}, func(ctx context.Context, input *CreateTaskInput) (*TaskOutput, error) {
-		claims := middleware.GetClaims(ctx)
-		if claims == nil {
-			return nil, huma.Error401Unauthorized("unauthorized")
+		claims, err := resolveAuth(input.Authorization, jwtSecret)
+		if err != nil {
+			return nil, err
 		}
 
-		projectID, err := uuid.Parse(input.ProjectID)
+		projectID, err := mustParseUUID(input.ProjectID)
 		if err != nil {
-			return nil, huma.Error400BadRequest("invalid project id")
+			return nil, err
 		}
-
-		statusID, err := uuid.Parse(input.Body.StatusID)
+		statusID, err := mustParseUUID(input.Body.StatusID)
 		if err != nil {
-			return nil, huma.Error400BadRequest("invalid status id")
+			return nil, err
 		}
 
 		task := &models.Task{
@@ -134,12 +143,11 @@ func RegisterTaskRoutes(api huma.API, db *database.DB, hub *ws.Hub) {
 			Description: input.Body.Description,
 			StatusID:    statusID,
 			CreatedBy:   claims.UserID,
-			DueDate:     input.Body.DueDate,
+			UpdatedBy:   &claims.UserID,
+			DueDate:     parseDate(input.Body.DueDate),
 		}
-
 		if input.Body.AssignedTo != nil {
-			uid, err := uuid.Parse(*input.Body.AssignedTo)
-			if err == nil {
+			if uid, e := uuid.Parse(*input.Body.AssignedTo); e == nil {
 				task.AssignedTo = &uid
 			}
 		}
@@ -149,10 +157,7 @@ func RegisterTaskRoutes(api huma.API, db *database.DB, hub *ws.Hub) {
 		}
 
 		hub.Broadcast(projectID, &ws.Message{
-			Type:      "taskCreated",
-			ProjectID: projectID,
-			Data:      task,
-			UserID:    claims.UserID,
+			Type: "taskCreated", ProjectID: projectID, Data: task, UserID: claims.UserID,
 		})
 
 		resp := &TaskOutput{}
@@ -164,6 +169,7 @@ func RegisterTaskRoutes(api huma.API, db *database.DB, hub *ws.Hub) {
 		resp.Body.AssignedTo = task.AssignedTo
 		resp.Body.DueDate = task.DueDate
 		resp.Body.CreatedBy = task.CreatedBy
+		resp.Body.UpdatedBy = task.UpdatedBy
 		resp.Body.CreatedAt = task.CreatedAt.Format("2006-01-02T15:04:05Z")
 		resp.Body.UpdatedAt = task.UpdatedAt.Format("2006-01-02T15:04:05Z")
 		return resp, nil
@@ -177,9 +183,9 @@ func RegisterTaskRoutes(api huma.API, db *database.DB, hub *ws.Hub) {
 		Security:    []map[string][]string{{"bearerAuth": {}}},
 		Tags:        []string{"Tasks"},
 	}, func(ctx context.Context, input *UpdateTaskInput) (*TaskOutput, error) {
-		claims := middleware.GetClaims(ctx)
-		if claims == nil {
-			return nil, huma.Error401Unauthorized("unauthorized")
+		claims, err := resolveAuth(input.Authorization, jwtSecret)
+		if err != nil {
+			return nil, err
 		}
 
 		projectID, _ := uuid.Parse(input.ProjectID)
@@ -197,28 +203,26 @@ func RegisterTaskRoutes(api huma.API, db *database.DB, hub *ws.Hub) {
 			task.Description = input.Body.Description
 		}
 		if input.Body.StatusID != "" {
-			if sid, err := uuid.Parse(input.Body.StatusID); err == nil {
+			if sid, e := uuid.Parse(input.Body.StatusID); e == nil {
 				task.StatusID = sid
 			}
 		}
 		if input.Body.DueDate != nil {
-			task.DueDate = input.Body.DueDate
+			task.DueDate = parseDate(input.Body.DueDate)
 		}
 		if input.Body.AssignedTo != nil {
 			if *input.Body.AssignedTo == "" {
 				task.AssignedTo = nil
-			} else if uid, err := uuid.Parse(*input.Body.AssignedTo); err == nil {
+			} else if uid, e := uuid.Parse(*input.Body.AssignedTo); e == nil {
 				task.AssignedTo = &uid
 			}
 		}
 
+		task.UpdatedBy = &claims.UserID
 		db.Gorm.Save(&task)
 
 		hub.Broadcast(projectID, &ws.Message{
-			Type:      "taskUpdated",
-			ProjectID: projectID,
-			Data:      task,
-			UserID:    claims.UserID,
+			Type: "taskUpdated", ProjectID: projectID, Data: task, UserID: claims.UserID,
 		})
 
 		resp := &TaskOutput{}
@@ -230,6 +234,7 @@ func RegisterTaskRoutes(api huma.API, db *database.DB, hub *ws.Hub) {
 		resp.Body.AssignedTo = task.AssignedTo
 		resp.Body.DueDate = task.DueDate
 		resp.Body.CreatedBy = task.CreatedBy
+		resp.Body.UpdatedBy = task.UpdatedBy
 		resp.Body.CreatedAt = task.CreatedAt.Format("2006-01-02T15:04:05Z")
 		resp.Body.UpdatedAt = task.UpdatedAt.Format("2006-01-02T15:04:05Z")
 		return resp, nil
@@ -243,9 +248,9 @@ func RegisterTaskRoutes(api huma.API, db *database.DB, hub *ws.Hub) {
 		Security:    []map[string][]string{{"bearerAuth": {}}},
 		Tags:        []string{"Tasks"},
 	}, func(ctx context.Context, input *MoveTaskInput) (*TaskOutput, error) {
-		claims := middleware.GetClaims(ctx)
-		if claims == nil {
-			return nil, huma.Error401Unauthorized("unauthorized")
+		claims, err := resolveAuth(input.Authorization, jwtSecret)
+		if err != nil {
+			return nil, err
 		}
 
 		projectID, _ := uuid.Parse(input.ProjectID)
@@ -258,13 +263,11 @@ func RegisterTaskRoutes(api huma.API, db *database.DB, hub *ws.Hub) {
 		}
 
 		task.StatusID = statusID
+		task.UpdatedBy = &claims.UserID
 		db.Gorm.Save(&task)
 
 		hub.Broadcast(projectID, &ws.Message{
-			Type:      "taskUpdated",
-			ProjectID: projectID,
-			Data:      task,
-			UserID:    claims.UserID,
+			Type: "taskUpdated", ProjectID: projectID, Data: task, UserID: claims.UserID,
 		})
 
 		resp := &TaskOutput{}
@@ -276,6 +279,7 @@ func RegisterTaskRoutes(api huma.API, db *database.DB, hub *ws.Hub) {
 		resp.Body.AssignedTo = task.AssignedTo
 		resp.Body.DueDate = task.DueDate
 		resp.Body.CreatedBy = task.CreatedBy
+		resp.Body.UpdatedBy = task.UpdatedBy
 		resp.Body.CreatedAt = task.CreatedAt.Format("2006-01-02T15:04:05Z")
 		resp.Body.UpdatedAt = task.UpdatedAt.Format("2006-01-02T15:04:05Z")
 		return resp, nil
@@ -289,9 +293,9 @@ func RegisterTaskRoutes(api huma.API, db *database.DB, hub *ws.Hub) {
 		Security:    []map[string][]string{{"bearerAuth": {}}},
 		Tags:        []string{"Tasks"},
 	}, func(ctx context.Context, input *DeleteTaskInput) (*struct{}, error) {
-		claims := middleware.GetClaims(ctx)
-		if claims == nil {
-			return nil, huma.Error401Unauthorized("unauthorized")
+		claims, err := resolveAuth(input.Authorization, jwtSecret)
+		if err != nil {
+			return nil, err
 		}
 
 		projectID, _ := uuid.Parse(input.ProjectID)
@@ -303,12 +307,9 @@ func RegisterTaskRoutes(api huma.API, db *database.DB, hub *ws.Hub) {
 		}
 
 		hub.Broadcast(projectID, &ws.Message{
-			Type:      "taskDeleted",
-			ProjectID: projectID,
-			Data:      map[string]string{"id": input.TaskID},
-			UserID:    claims.UserID,
+			Type: "taskDeleted", ProjectID: projectID,
+			Data: map[string]string{"id": input.TaskID}, UserID: claims.UserID,
 		})
-
 		return nil, nil
 	})
 }

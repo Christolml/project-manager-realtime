@@ -1,0 +1,25 @@
+# Dependencies
+frontend/node_modules/
+
+# Build output
+frontend/dist/
+
+# TypeScript
+*.tsbuildinfo
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Go binary (see backend/.gitignore)
+*.tsbuildinfo

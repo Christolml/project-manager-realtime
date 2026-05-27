@@ -57,9 +57,20 @@ export interface Task {
   dueDate?: string | null
   createdBy: string
   creator?: User
+  updatedBy?: string | null
+  updater?: User | null
   createdAt: string
   updatedAt: string
 }
+
+export interface Member {
+  userId: string
+  username: string
+  email: string
+  role: string
+}
+
+export type ViewMode = 'kanban' | 'list' | 'calendar'
 
 export interface WSMessage {
   type: string

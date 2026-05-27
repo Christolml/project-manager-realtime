@@ -4,10 +4,10 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/joho/godotenv"
 	"github.com/anomalyco/project-manager/internal/config"
 	"github.com/anomalyco/project-manager/internal/database"
 	"github.com/anomalyco/project-manager/internal/handlers"
-	"github.com/anomalyco/project-manager/internal/middleware"
 	ws "github.com/anomalyco/project-manager/internal/websocket"
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -16,6 +16,7 @@ import (
 )
 
 func main() {
+	godotenv.Load()
 	cfg := config.Load()
 	db := database.Connect(cfg.DatabaseURL)
 	hub := ws.NewHub()
@@ -37,15 +38,12 @@ func main() {
 	}
 
 	api := humachi.New(r, apiConfig)
-	handlers.RegisterAuthRoutes(api, db, cfg.JWTSecret)
 
-	r.Group(func(sub chi.Router) {
-		sub.Use(middleware.AuthMiddleware(cfg.JWTSecret))
-		protectedAPI := humachi.New(sub, huma.DefaultConfig("Protected", "1.0.0"))
-		handlers.RegisterProjectRoutes(protectedAPI, db)
-		handlers.RegisterStatusRoutes(protectedAPI, db)
-		handlers.RegisterTaskRoutes(protectedAPI, db, hub)
-	})
+	handlers.RegisterAuthRoutes(api, db, cfg.JWTSecret)
+	handlers.RegisterProjectRoutes(api, db, cfg.JWTSecret)
+	handlers.RegisterStatusRoutes(api, db, cfg.JWTSecret)
+	handlers.RegisterTaskRoutes(api, db, hub, cfg.JWTSecret)
+	handlers.RegisterMemberRoutes(api, db, hub, cfg.JWTSecret)
 
 	addr := ":" + cfg.Port
 	log.Printf("Server starting on %s", addr)

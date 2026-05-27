@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	"github.com/anomalyco/project-manager/internal/database"
-	"github.com/anomalyco/project-manager/internal/middleware"
 	"github.com/anomalyco/project-manager/internal/models"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
@@ -49,7 +48,7 @@ type StatusOutput struct {
 	}
 }
 
-func RegisterStatusRoutes(api huma.API, db *database.DB) {
+func RegisterStatusRoutes(api huma.API, db *database.DB, jwtSecret string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "createStatus",
 		Method:      http.MethodPost,
@@ -58,19 +57,20 @@ func RegisterStatusRoutes(api huma.API, db *database.DB) {
 		Security:    []map[string][]string{{"bearerAuth": {}}},
 		Tags:        []string{"Statuses"},
 	}, func(ctx context.Context, input *CreateStatusInput) (*StatusOutput, error) {
-		claims := middleware.GetClaims(ctx)
-		if claims == nil {
-			return nil, huma.Error401Unauthorized("unauthorized")
-		}
-
-		projectID, err := uuid.Parse(input.ProjectID)
+		claims, err := resolveAuth(input.Authorization, jwtSecret)
 		if err != nil {
-			return nil, huma.Error400BadRequest("invalid project id")
+			return nil, err
 		}
 
-		var count int64
-		db.Gorm.Model(&models.ProjectMember{}).Where("project_id = ? AND user_id = ?", projectID, claims.UserID).Count(&count)
-		if count == 0 {
+		projectID, err := mustParseUUID(input.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+
+		var isMember int64
+		db.Gorm.Model(&models.ProjectMember{}).
+			Where("project_id = ? AND user_id = ?", projectID, claims.UserID).Count(&isMember)
+		if isMember == 0 {
 			return nil, huma.Error403Forbidden("not a member of this project")
 		}
 
@@ -106,9 +106,9 @@ func RegisterStatusRoutes(api huma.API, db *database.DB) {
 		Security:    []map[string][]string{{"bearerAuth": {}}},
 		Tags:        []string{"Statuses"},
 	}, func(ctx context.Context, input *UpdateStatusInput) (*StatusOutput, error) {
-		claims := middleware.GetClaims(ctx)
-		if claims == nil {
-			return nil, huma.Error401Unauthorized("unauthorized")
+		_, err := resolveAuth(input.Authorization, jwtSecret)
+		if err != nil {
+			return nil, err
 		}
 
 		projectID, _ := uuid.Parse(input.ProjectID)
@@ -126,7 +126,6 @@ func RegisterStatusRoutes(api huma.API, db *database.DB) {
 			status.Color = input.Body.Color
 		}
 		status.Order = input.Body.Order
-
 		db.Gorm.Save(&status)
 
 		resp := &StatusOutput{}
@@ -147,9 +146,9 @@ func RegisterStatusRoutes(api huma.API, db *database.DB) {
 		Security:    []map[string][]string{{"bearerAuth": {}}},
 		Tags:        []string{"Statuses"},
 	}, func(ctx context.Context, input *DeleteStatusInput) (*struct{}, error) {
-		claims := middleware.GetClaims(ctx)
-		if claims == nil {
-			return nil, huma.Error401Unauthorized("unauthorized")
+		_, err := resolveAuth(input.Authorization, jwtSecret)
+		if err != nil {
+			return nil, err
 		}
 
 		projectID, _ := uuid.Parse(input.ProjectID)
@@ -159,7 +158,6 @@ func RegisterStatusRoutes(api huma.API, db *database.DB) {
 		if result.RowsAffected == 0 {
 			return nil, huma.Error404NotFound("status not found")
 		}
-
 		return nil, nil
 	})
 }

@@ -28,9 +28,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 }
 
 const typeStyles: Record<Toast['type'], string> = {
-  error: 'bg-red-50 border-red-300 text-red-800',
-  success: 'bg-green-50 border-green-300 text-green-800',
-  info: 'bg-blue-50 border-blue-300 text-blue-800',
+  error: 'bg-red-50 border-red-200 text-red-700',
+  success: 'bg-emerald-50 border-emerald-200 text-emerald-700',
+  info: 'bg-indigo-50 border-indigo-200 text-indigo-700',
 }
 
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number) => void }) {
@@ -41,10 +41,10 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
 
   return (
     <div
-      className={`flex items-start gap-2 px-4 py-3 rounded-lg border shadow-lg text-sm animate-slide-in ${typeStyles[toast.type]}`}
+      className={`flex items-start gap-2.5 px-4 py-3 rounded-xl border shadow-lg shadow-gray-200/50 text-sm backdrop-blur-sm bg-white/90 animate-slide-in font-['DM_Sans',sans-serif] ${typeStyles[toast.type]}`}
     >
-      <span className="flex-1">{toast.message}</span>
-      <button onClick={() => onDismiss(toast.id)} className="text-current opacity-60 hover:opacity-100 font-bold leading-none">
+      <span className="flex-1 leading-snug">{toast.message}</span>
+      <button onClick={() => onDismiss(toast.id)} className="text-current opacity-50 hover:opacity-100 font-bold leading-none shrink-0 mt-0.5">
         ✕
       </button>
     </div>

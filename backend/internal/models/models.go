@@ -1,11 +1,61 @@
 package models
 
 import (
+	"database/sql/driver"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+type DateOnly struct {
+	time.Time
+}
+
+func (d DateOnly) MarshalJSON() ([]byte, error) {
+	return json.Marshal(d.Time.Format("2006-01-02"))
+}
+
+func (d *DateOnly) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	if s == "" {
+		return nil
+	}
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return err
+	}
+	d.Time = t
+	return nil
+}
+
+func (d *DateOnly) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	switch v := value.(type) {
+	case time.Time:
+		d.Time = v
+	case string:
+		t, err := time.Parse("2006-01-02", v)
+		if err != nil {
+			return err
+		}
+		d.Time = t
+	default:
+		return fmt.Errorf("cannot scan DateOnly from %T", value)
+	}
+	return nil
+}
+
+func (d DateOnly) Value() (driver.Value, error) {
+	return d.Time.Format("2006-01-02"), nil
+}
 
 type User struct {
 	ID        uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
@@ -55,7 +105,7 @@ type TaskStatus struct {
 	ProjectID uuid.UUID `gorm:"type:uuid;not null;index" json:"projectId"`
 	Name      string    `gorm:"not null;size:50" json:"name"`
 	Color     string    `gorm:"default:#6B7280;size:7" json:"color"`
-	Order     int       `gorm:"default:0" json:"order"`
+	Order     int       `gorm:"column:status_order;default:0" json:"order"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -75,9 +125,11 @@ type Task struct {
 	Status      TaskStatus `gorm:"foreignKey:StatusID" json:"status,omitempty"`
 	AssignedTo  *uuid.UUID `gorm:"type:uuid" json:"assignedTo"`
 	Assignee    *User      `gorm:"foreignKey:AssignedTo" json:"assignee,omitempty"`
-	DueDate     *time.Time `json:"dueDate"`
+	DueDate     *DateOnly  `gorm:"type:date" json:"dueDate"`
 	CreatedBy   uuid.UUID  `gorm:"type:uuid;not null" json:"createdBy"`
 	Creator     User       `gorm:"foreignKey:CreatedBy" json:"creator,omitempty"`
+	UpdatedBy   *uuid.UUID `gorm:"type:uuid" json:"updatedBy"`
+	Updater     *User      `gorm:"foreignKey:UpdatedBy" json:"updater,omitempty"`
 	CreatedAt   time.Time  `json:"createdAt"`
 	UpdatedAt   time.Time  `json:"updatedAt"`
 }

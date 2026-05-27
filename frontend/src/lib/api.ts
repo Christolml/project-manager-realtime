@@ -1,4 +1,4 @@
-import type { Project, ProjectDetail, TaskStatus, Task } from '../types'
+import type { Project, ProjectDetail, TaskStatus, Task, Member } from '../types'
 
 const BASE_URL = '/api'
 
@@ -77,6 +77,15 @@ export const api = {
     delete: (projectId: string, statusId: string) =>
       request<void>(`/projects/${projectId}/statuses/${statusId}`, { method: 'DELETE' }),
   },
+  members: {
+    list: (projectId: string) => request<Member[]>(`/projects/${projectId}/members`),
+    invite: (projectId: string, data: { email: string }) =>
+      request<Member>(`/projects/${projectId}/members`, { method: 'POST', body: JSON.stringify(data) }),
+    remove: (projectId: string, userId: string) =>
+      request<void>(`/projects/${projectId}/members/${userId}`, { method: 'DELETE' }),
+    leave: (projectId: string) =>
+      request<void>(`/projects/${projectId}/leave`, { method: 'POST' }),
+  },
   tasks: {
     list: (projectId: string) => request<Task[]>(`/projects/${projectId}/tasks`),
     create: (projectId: string, data: { title: string; description?: string; statusId: string; assignedTo?: string; dueDate?: string }) =>
@@ -97,4 +106,24 @@ export const api = {
     delete: (projectId: string, taskId: string) =>
       request<void>(`/projects/${projectId}/tasks/${taskId}`, { method: 'DELETE' }),
   },
+}
+
+export function parseLocalDate(dateStr: string): Date {
+  const [y, m, d] = dateStr.split('T')[0].split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+
+export function formatDate(dateStr: string, options?: Intl.DateTimeFormatOptions): string {
+  return parseLocalDate(dateStr).toLocaleDateString('en-US', options || { month: 'short', day: 'numeric' })
+}
+
+export function isOverdue(dateStr: string): boolean {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return parseLocalDate(dateStr) < today
+}
+
+export function todayStr(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
