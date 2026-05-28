@@ -11,7 +11,10 @@ class WSClient {
 
   connect(token: string) {
     this.token = token
-    this.ws = new WebSocket(`ws://localhost:8080/ws?token=${token}`)
+    const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8080'
+    const protocol = wsUrl.startsWith('https') ? 'wss' : 'ws'
+    const base = wsUrl.replace(/^https?:\/\//, `${protocol}://`)
+    this.ws = new WebSocket(`${base}/ws?token=${token}`)
 
     this.ws.onopen = () => {
       if (this.projectId) {
